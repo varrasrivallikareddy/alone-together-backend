@@ -1,24 +1,13 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const nodemailer = require('nodemailer');
-const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const jwt = require("jsonwebtoken");
+const User = require("../models/User");
+const { Resend } = require("resend");
 
-// ✅ Secure Gmail SMTP (Render safe)
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: true, // true for 465
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD,
-  },
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-// ===============================
-// 📩 SEND OTP
-// ===============================
-router.post('/send-otp', async (req, res) => {
+// SEND OTP
+router.post("/send-otp", async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -26,21 +15,23 @@ router.post('/send-otp', async (req, res) => {
       return res.status(400).json({ message: "Email is required" });
     }
 
+    // generate 6 digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-    // Save or update user with OTP
+    // save OTP in database
     await User.findOneAndUpdate(
       { email },
-      { email, otp },
+      { email, otp, role: "user" },
       { upsert: true, new: true }
     );
 
-    // Send email
-    await transporter.sendMail({
-      from: `"Alone Together" <${process.env.GMAIL_USER}>`,
+    // send email using Resend
+    await resend.emails.send({
+      from: "Alone Together <onboarding@resend.dev>",
       to: email,
-      subject: "Your OTP Code",
-      text: `Your OTP is ${otp}. It is valid for 10 minutes.`,
+      subject: "Your OTP - Alone Together",
+      html: `<h2>Your OTP is: ${otp}</h2>
+             <p>This OTP is valid for 10 minutes.</p>`,
     });
 
     res.json({ message: "OTP sent successfully" });
@@ -51,16 +42,11 @@ router.post('/send-otp', async (req, res) => {
   }
 });
 
-// ===============================
-// 🔐 VERIFY OTP
-// ===============================
-router.post('/verify-otp', async (req, res) => {
+
+// VERIFY OTP
+router.post("/verify-otp", async (req, res) => {
   try {
     const { email, otp } = req.body;
-
-    if (!email || !otp) {
-      return res.status(400).json({ message: "Email and OTP are required" });
-    }
 
     const user = await User.findOne({ email });
 
@@ -68,22 +54,17 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(400).json({ message: "Invalid OTP" });
     }
 
-    // Clear OTP after successful verification
-    user.otp = null;
-    await user.save();
-
-    // Create JWT token
     const token = jwt.sign(
-      { email: user.email, id: user._id },
+      { id: user._id, email: user.email, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
-    res.json({ message: "Login successful", token });
+    res.json({ token });
 
   } catch (error) {
     console.error("Verify OTP Error:", error);
-    res.status(500).json({ message: "OTP verification failed" });
+    res.status(500).json({ message: "Server error" });
   }
 });
 
